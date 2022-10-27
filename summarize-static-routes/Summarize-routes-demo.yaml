@@ -1,0 +1,73 @@
+---
+
+- name: Configure static routes if no summary exists
+  hosts: CSR1Kv-0
+  connection: local
+  gather_facts: false
+
+  tasks:
+
+  - name: Step 1 - Get static route configuration
+    cisco.ios.command:
+      commands:
+        - show running-config | include ip route|ipv6 route
+    register: ios_config
+  - name: Extract routes from response 
+    ansible.builtin.set_fact:
+      static_route_config: "{{ ios_config['stdout'][0] }}"  
+  - debug:
+      var: static_route_config
+
+  - name: Step 2 - Transform config into structured Ansible data 
+    cisco.ios.ios_static_routes:
+      running_config: "{{ static_route_config }}"
+      state: parsed
+    register: config_parse_response 
+  - name: Extract routes from response 
+    ansible.builtin.set_fact:
+      existing_static_routes: "{{ config_parse_response['parsed'] }}"  
+  - debug:
+      var: existing_static_routes
+
+  - name: Step 3 - Check for summary routes and remove sub-routes
+    summarize_static_routes:
+      existing_config: "{{ existing_static_routes }}"
+      candidate_config:
+      - address_families:
+        - afi: ipv4
+          routes:
+          - dest: 193.168.42.0/30
+            next_hops:
+            - forward_router_address: 10.10.20.20
+          - dest: 193.168.44.0/30
+            next_hops:
+            - forward_router_address: 10.10.20.20
+        - afi: ipv6
+          routes:
+          - dest: FD3D:3D:A:10:CC::/128
+            next_hops:
+            - forward_router_address: FD3D:3D:A:14::2
+          - dest: FD3D:3D:A:16:CC::/128
+            next_hops:
+            - forward_router_address: FD3D:3D:A:14::2
+      - vrf: blue
+        address_families:
+        - afi: ipv4
+          routes:
+          - dest: 193.168.44.0/30
+            next_hops:
+            - forward_router_address: 10.10.20.20
+          - dest: 193.168.46.0/30
+            next_hops:
+            - forward_router_address: 10.10.20.20
+    register: summary_check_response
+  - name: Extract summarized routes from response 
+    ansible.builtin.set_fact:
+      summarized_static_routes: "{{ summary_check_response['summarized_static_routes'] }}"  
+  - debug:
+      var: summarized_static_routes
+
+  - name: Step 4 - Configure static routes
+    cisco.ios.ios_static_routes:
+      config: "{{ summarized_static_routes }}"
+    when: summarized_static_routes != []
